@@ -1,0 +1,24 @@
+{
+  "_comment": "复制为 config.json 后按需修改。birth 用于人生周历。",
+  "city": "杭州",
+  "city_sub": "浙江 · 中国",
+  "latitude": 30.2943,
+  "longitude": 120.1663,
+  "timezone": "Asia/Shanghai",
+  "width": 1072,
+  "height": 1448,
+  "hours_shown": 6,
+  "days_shown": 4,
+  "output": "dashboard.png",
+  "pages": [
+    "calendar.png",
+    "dashboard.png",
+    "lifeweeks.png"
+  ],
+  "page_seconds": 900,
+  "life": {
+    "birth": "1990-01-01",
+    "years": 100,
+    "weeks_per_year": 52
+  }
+}

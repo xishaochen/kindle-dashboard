@@ -1,0 +1,45 @@
+{
+  "name": "天气仪表盘",
+  "items": [
+    {
+      "name": "🔧 WiFi 一键修复",
+      "action": "./bin/act/wifi_repair.sh",
+      "refresh": false
+    },
+    {
+      "name": "🔍 WiFi 诊断",
+      "action": "./bin/act/wifi_diag.sh",
+      "refresh": false
+    },
+    {
+      "name": "📖 WiFi 手册",
+      "action": "./bin/act/wifi_manual.sh",
+      "refresh": false
+    },
+    {
+      "name": "📶 启动 WiFi",
+      "action": "./bin/act/wifi.sh",
+      "refresh": false
+    },
+    {
+      "name": "📅 日历",
+      "action": "./bin/act/pin_cal.sh",
+      "refresh": false
+    },
+    {
+      "name": "🌤 天气",
+      "action": "./bin/act/pin_wx.sh",
+      "refresh": false
+    },
+    {
+      "name": "📊 人生周历",
+      "action": "./bin/act/pin_life.sh",
+      "refresh": false
+    },
+    {
+      "name": "🐱 小猫",
+      "action": "./bin/act/cat_on.sh",
+      "refresh": false
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+config.json
+*.log
+net/
+dist/
+frames/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
