@@ -87,10 +87,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(body, 200 if body else 404)
             return
 
-        if p.path == "/cat5/list":
-            # 动作清单 + 每个动作的帧数与矩形（必须放在 /cat5/ 前缀判断之前）
+        if p.path == "/cat6/list":
+            # 动作清单 + 每个动作的帧数与矩形（必须放在 /cat6/ 前缀判断之前）
             base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "dist", "cat5", "anim.txt")
+                                "dist", "cat6", "anim.txt")
             body = b""
             try:
                 with open(base, "rb") as f:
@@ -100,12 +100,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(body, 200 if body else 404)
             return
 
-        if p.path.startswith("/cat5/"):
+        if p.path.startswith("/cat6/"):
             # 猫动画资源：dist/cat5 下的帧图与清单
-            rel = p.path[len("/cat5/"):]
+            rel = p.path[len("/cat6/"):]
             rel = rel.replace("..", "").lstrip("/")
             fp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "dist", "cat5", *rel.split("/"))
+                              "dist", "cat6", *rel.split("/"))
             body = b""
             try:
                 with open(fp, "rb") as f:
@@ -113,7 +113,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 body = b""
             if body:
-                append("tool.log", "%s cat5 %s %dB" % (ts(), rel, len(body)))
+                append("tool.log", "%s cat6 %s %dB" % (ts(), rel, len(body)))
             self._send(body, 200 if body else 404)
             return
 

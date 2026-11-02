@@ -33,14 +33,14 @@ PIDF=$D/carousel.pid
 LOG=$D/carousel.log
 IDXF=$D/carousel.idx
 AWAKEF=$D/carousel.awake
-PAGES="calendar weather lifeweeks cat"
+PAGES="calendar weather lifeweeks cat gifpage"
 # 图 PC 的 bridge 地址：lifeweeks 页靠它渲染（设备侧无 python）
 PCIP=${PCIP:-192.168.1.100}
 # 会随时间变化的页：切到它之前先重渲一次，否则格子永远是旧的。
 # 用「日期变了」做触发条件，而不是每次切页都渲，避免无意义刷新。
 DATED_PAGES="calendar lifeweeks"
 # 靠 PC 供图的页（设备无渲染器）。catsavercat 从 bridge 的 /cat 取。
-REMOTE_PAGES="lifeweeks cat"
+REMOTE_PAGES="lifeweeks cat gifpage"
 
 FB=/mnt/us/libkh/bin/fbink
 IMGDIR=/tmp/weatherdash
@@ -88,8 +88,10 @@ napsleep() {
 # 页名混在一起。page.idx 是数字时 repaint() 的 case 匹配不上直接 return 1，
 # 表现为日志刷 "guard: repaint failed"，状态栏盖上来之后永远洗不掉。
 normalize_page() {
-  case "$1" in
-    calendar|weather|lifeweeks|cat) echo "$1"; return 0 ;;
+  # 页名白名单不单独维护：以 $PAGES 为唯一事实来源，
+  # 否则每加一页都要改这里，漏改就会把合法页名判成非法、page.idx 退回数字。
+  case " $PAGES " in
+    *" $1 "*) echo "$1"; return 0 ;;
   esac
   case "$1" in
     ''|*[!0-9]*) return 1 ;;
@@ -300,7 +302,7 @@ guard() {
 #   播放：按 period_ms 逐帧推进，贴到 (rectx, recty+SHIFT_Y)。
 #   帧数多、矩形小的动作（眨眼 1.5%、摇尾 5.8%）用 A2 不闪屏；
 #   大矩形（呼吸 27%）用 GC16 保灰阶。
-CAT5=$D/cat5
+CAT5=$D/cat6
 CAT_ACTIONS=""          # 动作清单
 CAT_CUR=""              # 当前动作
 CAT_N=0                 # 当前动作帧数
@@ -321,7 +323,7 @@ cat_fetch_base() {
   mkdir -p "$IMGDIR"
   if [ -s "$IMGDIR/cat.png.bak" ]; then :; fi
   curl -s --max-time 25 -o "$IMGDIR/cat.png.tmp" \
-    "http://$PCIP:8899/cat5/base.png" 2>/dev/null
+    "http://$PCIP:8899/cat6/base.png" 2>/dev/null
   if [ -s "$IMGDIR/cat.png.tmp" ] && \
      [ "$(wc -c < "$IMGDIR/cat.png.tmp")" -gt 5000 ]; then
     mv -f "$IMGDIR/cat.png.tmp" "$IMGDIR/cat.png"
@@ -334,7 +336,7 @@ cat_fetch_base() {
 # 猫页渲染
 # 从 PC 拉动作清单
 fetch_cat_list() {
-  list=$(curl -s --max-time 15 "http://$PCIP:8899/cat5/list" 2>/dev/null | tr -d '\r')
+  list=$(curl -s --max-time 15 "http://$PCIP:8899/cat6/list" 2>/dev/null | tr -d '\r')
   acts=""
   echo "$list" | while read -r a n per rx ry rw rh; do
     case "$a" in ''|'#'*) continue ;; esac
@@ -368,7 +370,7 @@ cat_fetch_action() {
   [ -n "$w" ] || return 1
   mkdir -p "$CAT5/$w"
   # 先拿全局清单里这一行的元数据
-  line=$(curl -s --max-time 15 "http://$PCIP:8899/cat5/list" 2>/dev/null | tr -d '\r' | grep "^$w ")
+  line=$(curl -s --max-time 15 "http://$PCIP:8899/cat6/list" 2>/dev/null | tr -d '\r' | grep "^$w ")
   [ -z "$line" ] && return 1
   set -- $line
   n="$2"; per="$3"; rx="$4"; ry="$5"; rw="$6"; rh="$7"
@@ -380,7 +382,7 @@ cat_fetch_action() {
   i=0
   while [ "$i" -lt "$n" ]; do
     curl -s --max-time 20 -o "$CAT5/$w/f$i.tmp" \
-      "http://$PCIP:8899/cat5/$w/f$i.png" 2>/dev/null
+      "http://$PCIP:8899/cat6/$w/f$i.png" 2>/dev/null
     if [ -s "$CAT5/$w/f$i.tmp" ] && [ "$(wc -c < "$CAT5/$w/f$i.tmp")" -gt 100 ]; then
       mv -f "$CAT5/$w/f$i.tmp" "$CAT5/$w/f$i.png"
     else
@@ -418,6 +420,100 @@ cat_load_meta() {
 }
 
 # 换到某个动作：基图走 GC16 全刷，然后开始放序列
+# ---- GIF 展示页 ---------------------------------------------------------
+# 独立展示页 = 一张静态背景图 + 中间小矩形逐帧刷新。
+# 为什么不整页刷：整页 GC16 每 70ms 一次等于全屏闪烁；只刷动画矩形
+# 实测 58.5ms/帧（17.1 fps），已超过源素材 14.3 fps 的要求。
+GIF_DIR=/mnt/us/weatherdash/gifpage
+GIF_N=0
+GIF_PER=100
+GIF_RX=0; GIF_RY=0; GIF_RW=0; GIF_RH=0
+GIF_FI=0
+GIF_OK=0
+GIF_FRAMES=0
+
+gif_load_meta() {
+  GIF_N=0; GIF_PER=100; GIF_RX=0; GIF_RY=0; GIF_RW=0; GIF_RH=0
+  gf="$GIF_DIR/anim.txt"
+  [ -s "$gf" ] || return 1
+  while read -r k a b c d; do
+    k=$(printf '%s' "$k" | tr -d '\r')
+    a=$(printf '%s' "$a" | tr -d '\r')
+    b=$(printf '%s' "$b" | tr -d '\r')
+    c=$(printf '%s' "$c" | tr -d '\r')
+    d=$(printf '%s' "$d" | tr -d '\r')
+    case "$k" in
+      n)    GIF_N=$a ;;
+      per)  GIF_PER=$a ;;
+      rect) GIF_RX=$a; GIF_RY=$b; GIF_RW=$c; GIF_RH=$d ;;
+    esac
+  done < "$gf"
+  case "$GIF_N" in ''|*[!0-9]*) GIF_N=0 ;; esac
+  case "$GIF_PER" in ''|*[!0-9]*) GIF_PER=100 ;; esac
+  [ "$GIF_PER" -lt 40 ] && GIF_PER=40
+  [ "$GIF_N" -lt 1 ] && return 1
+  return 0
+}
+
+# 拉背景图与 meta（缺哪补哪，已有就跳过）
+gif_fetch() {
+  mkdir -p "$GIF_DIR" 2>/dev/null
+  if [ ! -s "$GIF_DIR/bg.png" ]; then
+    curl -s --max-time 20 -o "$GIF_DIR/bg.png.tmp" \
+      "http://$PCIP:8899/cat6/gifpage/bg.png" || return 1
+    [ -s "$GIF_DIR/bg.png.tmp" ] || return 1
+    mv -f "$GIF_DIR/bg.png.tmp" "$GIF_DIR/bg.png"
+  fi
+  if [ ! -s "$GIF_DIR/anim.txt" ]; then
+    curl -s --max-time 20 -o "$GIF_DIR/anim.txt.tmp" \
+      "http://$PCIP:8899/cat6/gifpage/anim.txt" || return 1
+    [ -s "$GIF_DIR/anim.txt.tmp" ] || return 1
+    mv -f "$GIF_DIR/anim.txt.tmp" "$GIF_DIR/anim.txt"
+  fi
+  return 0
+}
+
+# 素材是否齐：只查首尾两帧，不做 24 次磁盘 stat
+gif_cached() {
+  gif_load_meta || return 1
+  [ -s "$GIF_DIR/bg.png" ] || return 1
+  [ -s "$GIF_DIR/f0.png" ] || return 1
+  [ -s "$GIF_DIR/f$((GIF_N - 1)).png" ] || return 1
+  return 0
+}
+
+# 贴一帧：只刷动画矩形，全程 GC16
+gif_show_frame() {
+  [ "$GIF_OK" = "1" ] || return 1
+  gf="$GIF_DIR/f$GIF_FI.png"
+  [ -s "$gf" ] || return 1
+  if "$FB" -q -g "file=$gf,x=$GIF_RX,y=$((GIF_RY + SHIFT_Y))" -W GC16 >/dev/null 2>&1; then
+    GIF_FRAMES=$((GIF_FRAMES + 1))
+    # 残影清理：每 24 帧整页重贴背景
+    if [ $((GIF_FRAMES % 24)) -eq 0 ] && [ -s "$GIF_DIR/bg.png" ]; then
+      "$FB" -q -g "file=$GIF_DIR/bg.png,x=0,y=$SHIFT_Y" -W GC16 >/dev/null 2>&1
+    fi
+    return 0
+  fi
+  return 1
+}
+
+gif_tick() {
+  gif_show_frame || return 1
+  GIF_FI=$(( (GIF_FI + 1) % GIF_N ))
+  return 0
+}
+
+# 只在该占屏时刷
+gif_probe() {
+  gcur=$(cat "$D/page.idx" 2>/dev/null | tr -d '\r\n')
+  if [ "$gcur" = "gifpage" ] && [ -s "$GIF_DIR/bg.png" ] && [ "$GIF_N" -gt 0 ]; then
+    GIF_OK=1
+  else
+    GIF_OK=0
+  fi
+}
+
 cat_set_pose() {
   want="$1"
   [ -n "$want" ] || return 1
@@ -452,9 +548,10 @@ cat_show_frame() {
   [ -s "$fp" ] || return 1
 
   # 面积阈值：超过 12% 屏（约 18 万 px）用 GC16，否则 A2
-  area=$(( CAT_RW * CAT_RH ))
-  wave=A2
-  [ "$area" -gt 180000 ] && wave=GC16
+  # measured on device: GC16 == A2 in speed (23-38ms for every
+  # region, incl. full screen), so keep full 16-level greyscale.
+  # fbink is called without -f here, so GC16 does not flash black.
+  wave=GC16
 
   if "$FB" -q -g "file=$fp,x=$CAT_RX,y=$((CAT_RY + SHIFT_Y))" -W $wave >/dev/null 2>&1; then
     CAT_FRAMES=$((CAT_FRAMES + 1))
@@ -623,10 +720,10 @@ render_one() {
       [ -z "$CAT_CUR" ] && cat_set_pose "$(echo $CAT_ACTIONS | cut -d' ' -f1)"
     fi
     # 基图必须是 cat5 版（旧 AI 插画猫会让屏上出现两只猫）
-    # 用 cat5.base 标记版本：没有标记或标记不符就重拉
-    if [ ! -s "$IMGDIR/cat.png" ] || [ "$(cat "$D/cat5.base" 2>/dev/null)" != "v5" ]; then
+    # 用 cat6.base 标记版本：没有标记或标记不符就重拉
+    if [ ! -s "$IMGDIR/cat.png" ] || [ "$(cat "$D/cat6.base" 2>/dev/null)" != "v6" ]; then
       if cat_fetch_base; then
-        echo v5 > "$D/cat5.base"
+        echo v5 > "$D/cat6.base"
         log "cat5 base fetched $(wc -c < "$IMGDIR/cat.png")B"
       else
         log "cat5 base fetch failed"
@@ -644,6 +741,28 @@ render_one() {
     else
       rc=1
       log "cat pose unavailable"
+    fi
+    keepawake
+    band_md5 > "$GUARD_REF"
+    rm -f "$GUARD_BAD"
+    log "render $page rc=$rc $(( $(date +%s) - t0 ))s"
+    return $rc
+  fi
+
+  # GIF 展示页：和 lifeweeks 同理，设备侧只负责上屏。
+  # 先上静态背景（含标题/说明/相框），之后主循环只刷动画矩形。
+  if [ "$page" = "gifpage" ]; then
+    gif_fetch
+    if gif_cached; then
+      GIF_FI=0
+      GIF_FRAMES=0
+      page_idx_write "gifpage"
+      "$FB" -q -g "file=$GIF_DIR/bg.png,x=0,y=$SHIFT_Y" -W GC16 >/dev/null 2>&1
+      rc=$?
+      log "gifpage shown n=$GIF_N per=${GIF_PER}ms rect=$GIF_RX,$GIF_RY ${GIF_RW}x${GIF_RH} rc=$rc"
+    else
+      rc=1
+      log "gifpage assets unavailable"
     fi
     keepawake
     band_md5 > "$GUARD_REF"
@@ -682,6 +801,7 @@ do_loop() {
     guard_acc=0
     next_blink=$(cat "$D/cat.nextblink" 2>/dev/null)
     case "$next_blink" in ''|*[!0-9]*) next_blink=0 ;; esac
+    next_gif=0
     while [ "$n" -lt "$interval" ]; do
       [ -f "$ON" ] || break
       # 采样粒度要跟动作走。meta 里的 period 是 1~4 秒：
@@ -689,9 +809,15 @@ do_loop() {
       # 猫页：tick = CAT_PER/2（下限 80ms，上限 600ms）；非猫页：5 秒。
       cat_probe
       cat_here=$CAT_OK
+      gif_probe
+      gif_here=$GIF_OK
       if [ "$cat_here" -eq 1 ]; then
         tick_ms=$(( CAT_PER / 2 ))
-        [ "$tick_ms" -lt 80 ] && tick_ms=80
+        [ "$tick_ms" -lt 45 ] && tick_ms=45
+        [ "$tick_ms" -gt 600 ] && tick_ms=600
+      elif [ "$gif_here" -eq 1 ]; then
+        tick_ms=$(( GIF_PER / 2 ))
+        [ "$tick_ms" -lt 40 ] && tick_ms=40
         [ "$tick_ms" -gt 600 ] && tick_ms=600
       else
         tick_ms=5000
@@ -729,6 +855,17 @@ do_loop() {
         fi
       else
         next_blink=0
+      fi
+      # GIF 展示页：与猫页互斥，只在自己该占屏时推进帧
+      gif_probe
+      if [ "$GIF_OK" = "1" ]; then
+        now_g=$(now_ms)
+        if [ "$next_gif" -eq 0 ] || [ "$now_g" -ge "$next_gif" ]; then
+          gif_tick
+          next_gif=$(( now_g + GIF_PER ))
+        fi
+      else
+        next_gif=0
       fi
       if [ $((n % 60)) -eq 0 ]; then
         netfix
@@ -783,9 +920,10 @@ case "$1" in
     # 为什么需要它：仪表盘只是画在 framebuffer 上的像素，没有守护进程时
     # 框架自己的状态栏一重绘就把整页盖掉，看起来就像「点了没反应」。
     page="$2"
-    case "$page" in
-      calendar|weather|lifeweeks|cat) ;;
-      *) echo "usage: $0 pin calendar|weather|lifeweeks|cat"; exit 1 ;;
+    # 白名单不单独维护：PAGES 是唯一事实来源，否则新加页面必然漏改
+    case " $PAGES " in
+      *" $page "*) ;;
+      *) echo "usage: $0 pin $PAGES"; exit 1 ;;
     esac
     if alive; then
       kill "$(cat "$PIDF")" 2>/dev/null
@@ -810,10 +948,10 @@ case "$1" in
     page_idx_write "$page"
     # 猫页启动前先把 cat5 基图落好，否则第一屏会是旧 AI 猫
     if [ "$page" = "cat" ]; then
-      if [ ! -s "$IMGDIR/cat.png" ] || [ "$(cat "$D/cat5.base" 2>/dev/null)" != "v5" ]; then
+      if [ ! -s "$IMGDIR/cat.png" ] || [ "$(cat "$D/cat6.base" 2>/dev/null)" != "v6" ]; then
         mkdir -p "$IMGDIR"
         if cat_fetch_base; then
-          echo v5 > "$D/cat5.base"
+          echo v5 > "$D/cat6.base"
           log "cat5 base fetched at pin $(wc -c < "$IMGDIR/cat.png")B"
         fi
       fi
@@ -861,6 +999,19 @@ case "$1" in
         else
           log "pin cat pose failed, keep previous frame"
         fi
+      elif [ "$cur" = "gifpage" ]; then
+        # GIF 页用 gifpage/bg.png，不走 $IMGDIR/$cur.png 的命名约定，
+        # 所以必须单独一条分支，否则会被当成"缺图"反复 render。
+        gif_fetch
+        if gif_cached; then
+          "$FB" -q -g "file=$GIF_DIR/bg.png,x=0,y=$SHIFT_Y" -W GC16 >/dev/null 2>&1
+          page_idx_write "gifpage"
+          band_md5 > "$GUARD_REF"
+          rm -f "$GUARD_BAD"
+          log "pin gifpage n=$GIF_N per=${GIF_PER}ms"
+        else
+          log "pin gifpage assets missing"
+        fi
       elif [ ! -s "$IMGDIR/$cur.png" ]; then
         render_one 0 "$cur"
         page_idx_write "$cur"
@@ -877,13 +1028,20 @@ case "$1" in
       guard_acc=0
       nb=$(cat "$D/cat.nextblink" 2>/dev/null)
       case "$nb" in ''|*[!0-9]*) nb=0 ;; esac
+      ng=0
       while [ "$n" -lt 60 ]; do
         [ -f "$ON" ] || break
         cat_probe
         cat_here=$CAT_OK
+        gif_probe
+        gif_here=$GIF_OK
         if [ "$cat_here" -eq 1 ]; then
           tick_ms=$(( CAT_PER / 2 ))
-          [ "$tick_ms" -lt 80 ] && tick_ms=80
+          [ "$tick_ms" -lt 45 ] && tick_ms=45
+          [ "$tick_ms" -gt 600 ] && tick_ms=600
+        elif [ "$gif_here" -eq 1 ]; then
+          tick_ms=$(( GIF_PER / 2 ))
+          [ "$tick_ms" -lt 40 ] && tick_ms=40
           [ "$tick_ms" -gt 600 ] && tick_ms=600
         else
           tick_ms=5000
@@ -913,6 +1071,16 @@ case "$1" in
           fi
         else
           nb=0
+        fi
+        gif_probe
+        if [ "$GIF_OK" = "1" ]; then
+          now_g=$(now_ms)
+          if [ "$ng" -eq 0 ] || [ "$now_g" -ge "$ng" ]; then
+            gif_tick
+            ng=$(( now_g + GIF_PER ))
+          fi
+        else
+          ng=0
         fi
       done
     done
